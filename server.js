@@ -1,48 +1,87 @@
-const express = require('express');
-const cors = require('cors');
+// server.js
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const app = express();
 
-// Habilitar CORS para permitir peticiones desde tu frontend
+// Configuración de CORS amplia para evitar bloqueos
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
-// Ruta de prueba de salud del servidor
+const upload = multer({ storage: multer.memoryStorage() });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// Esquema estructurado para forzar la lectura exacta de la hoja InBody
+const inbodySchema = {
+  type: Type.OBJECT,
+  properties: {
+    score: { type: Type.NUMBER, description: "Puntuación InBody total" },
+    peso: { type: Type.NUMBER, description: "Peso corporal total en kg" },
+    mme: { type: Type.NUMBER, description: "Masa Músculo Esquelética MME en kg" },
+    grasaKg: { type: Type.NUMBER, description: "Masa Grasa Corporal en kg" },
+    pgc: { type: Type.NUMBER, description: "Porcentaje de Grasa Corporal PGC" },
+    imc: { type: Type.NUMBER, description: "Índice de Masa Corporal IMC" },
+    agua: { type: Type.NUMBER, description: "Agua Corporal Total en Litros" },
+    proteinas: { type: Type.NUMBER, description: "Proteínas en kg" },
+    minerales: { type: Type.NUMBER, description: "Minerales en kg" },
+    rcc: { type: Type.NUMBER, description: "Relación Cintura-Cadera" },
+    visceral: { type: Type.NUMBER, description: "Nivel de Grasa Visceral" },
+    tmb: { type: Type.NUMBER, description: "Tasa Metabólica Basal en kcal" },
+    magra_bi: { type: Type.STRING, description: "Masa magra Brazo Izquierdo (ej: '3.42 kg / 109.4%')" },
+    magra_bd: { type: Type.STRING, description: "Masa magra Brazo Derecho" },
+    magra_tr: { type: Type.STRING, description: "Masa magra Tronco" },
+    magra_pi: { type: Type.STRING, description: "Masa magra Pierna Izquierda" },
+    magra_pd: { type: Type.STRING, description: "Masa magra Pierna Derecha" },
+    grasa_bi: { type: Type.STRING, description: "Grasa Brazo Izquierdo" },
+    grasa_bd: { type: Type.STRING, description: "Grasa Brazo Derecho" },
+    grasa_tr: { type: Type.STRING, description: "Grasa Tronco" },
+    grasa_pi: { type: Type.STRING, description: "Grasa Pierna Izquierda" },
+    grasa_pd: { type: Type.STRING, description: "Grasa Pierna Derecha" }
+  },
+  required: ["score", "peso", "mme", "grasaKg", "pgc"]
+};
+
+// Endpoint de prueba de vida
 app.get('/', (req, res) => {
-  res.send('Backend de GymRats activo y funcionando correctamente');
+  res.send({ status: "OK", message: "Servidor GymRats activo" });
 });
 
-// Endpoint del escáner InBody
-app.post('/api/inbody/scan', (req, res) => {
+// Endpoint principal
+app.post('/api/scan-inbody', upload.single('image'), async (req, res) => {
   try {
-    const { userId } = req.body;
+    if (!req.file) return res.status(400).json({ error: "No se subió ninguna imagen" });
 
-    // Simulación de respuesta de escaneo de InBody
-    const inbodyData = {
-      timestamp: new Date().toISOString(),
-      peso: 75.4,
-      masaMuscular: 36.2,
-      porcentajeGrasa: 14.8,
-      aguaCorporal: 48.1,
-      status: 'Escaneo exitoso'
-    };
+    const base64Image = req.file.buffer.toString("base64");
 
-    res.status(200).json({
-      success: true,
-      message: 'Escaneo InBody completado exitosamente',
-      data: inbodyData
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        {
+          inlineData: {
+            mimeType: req.file.mimetype,
+            data: base64Image
+          }
+        },
+        {
+          text: "Extrae de forma precisa todos los valores numéricos y segmentales de esta ficha de resultados InBody. Mapea cada valor según la estructura requerida."
+        }
+      ],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: inbodySchema,
+        temperature: 0.0
+      }
     });
+
+    const datosInBody = JSON.parse(response.text);
+    res.json({ success: true, data: datosInBody });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Error al procesar el escaneo InBody',
-      error: error.message
-    });
+    console.error("Error al procesar con Gemini:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Asignación de puerto dinámica requerida por Render
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor de GymRats corriendo en el puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Servidor Gemini InBody corriendo en puerto ${PORT}`));
